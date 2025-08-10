@@ -196,12 +196,20 @@ namespace BrowserTabs
                 {
                     ActivateTab(tab);
 
-                    var closeButtonCondition = new AndCondition(
-                        new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.Button),
-                        new PropertyCondition(AutomationElement.NameProperty, "Close")
+                    // Search for the close button as a child of the tab element
+                    var closeButtonCondition = new OrCondition(
+                        new AndCondition(
+                            new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.Button),
+                            new PropertyCondition(AutomationElement.NameProperty, "Close")
+                        ),
+                        new AndCondition(
+                            new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.Button),
+                            new PropertyCondition(AutomationElement.NameProperty, "Close tab", PropertyConditionFlags.IgnoreCase)
+                        )
                     );
 
-                    var closeButtons = tab.AutomationElement.FindAll(TreeScope.Descendants, closeButtonCondition);
+                    // Use TreeScope.Children to only look at direct children
+                    var closeButtons = tab.AutomationElement.FindAll(TreeScope.Children, closeButtonCondition);
                     if (closeButtons.Count > 0)
                     {
                         var closeButton = closeButtons[0];

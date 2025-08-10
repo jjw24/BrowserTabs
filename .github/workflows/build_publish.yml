@@ -1,0 +1,46 @@
+name: Build & Publish
+
+on:
+  # push:
+  workflow_dispatch:
+
+jobs:
+  workflow:
+    runs-on: windows-latest
+    
+    steps:
+    - uses: actions/checkout@v2
+    
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v1
+      with:
+        dotnet-version: 7.0.x
+    
+    - name: Restore dependencies
+      run: dotnet restore
+   
+    - name: Build
+      run: dotnet build --no-restore -c Release
+    
+    - name: Upload Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: BrowserTabs
+        path: Output/Release/
+    
+    - name: publish to nuget 
+      if: ${{ github.ref == 'refs/heads/main' }}
+      run: nuget push output\release\*.nupkg -source 'https://api.nuget.org/v3/index.json' -apikey ${{secrets.publish}}
+    
+    - name: get version
+      if: ${{ github.ref == 'refs/heads/main' }}
+      run: |
+        $version = [system.diagnostics.fileversioninfo]::getversioninfo("output\release\BrowserTabs.dll").productversion
+        echo "release_version=$version" | out-file -filepath $env:github_env -encoding utf-8 -append
+    
+    - name: publish to github releases
+      if: ${{ github.ref == 'refs/heads/main' }}
+      uses: softprops/action-gh-release@v1
+      with:
+        files: "output\\release\\*.nupkg"
+        tag_name: "v${{ env.release_version }}"

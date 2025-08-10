@@ -2,6 +2,19 @@
 
 BrowserTabs is a .NET library for retrieving all open tabs from Chromium-based browsers (such as Microsoft Edge, Google Chrome, Brave, Vivaldi, Opera, and Chromium) on Windows.  
 
+## Installation
+You can install BrowserTabs via NuGet Package Manager, or
+
+Powershell:
+```bash
+Install-Package BrowserTabs
+```
+
+.Net CLI:
+```bash
+dotnet add package BrowserTabs
+```
+
 ## Features
 
 - Enumerate all open tabs across multiple Chromium-based browsers.

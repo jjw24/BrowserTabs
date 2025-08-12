@@ -273,34 +273,41 @@ namespace BrowserTabs
         private static List<(IntPtr hwnd, int processId)> GetAllChromiumWindows()
         {
             var browserWindows = new List<(IntPtr, int)>();
+            var chromiumNames = new HashSet<string>(ChromiumProcessNames, StringComparer.OrdinalIgnoreCase);
+            var windowHandles = new List<(IntPtr hwnd, uint pid)>();
+
+            // First, collect all window handles and process IDs
             NativeMethods.EnumWindows((hwnd, lParam) =>
             {
-                int length = NativeMethods.GetWindowTextLength(hwnd);
-                if (length == 0) return true;
-
-                var builder = new StringBuilder(length + 1);
-                NativeMethods.GetWindowText(hwnd, builder, builder.Capacity);
-                string title = builder.ToString();
-
                 uint pid;
                 NativeMethods.GetWindowThreadProcessId(hwnd, out pid);
+                windowHandles.Add((hwnd, pid));
+                return true;
+            }, IntPtr.Zero);
 
+            // Now process in parallel
+            Parallel.ForEach(windowHandles, window =>
+            {
                 try
                 {
-                    var process = Process.GetProcessById((int)pid);
-                    foreach (var processName in ChromiumProcessNames)
+                    var process = Process.GetProcessById((int)window.pid);
+                    if (chromiumNames.Contains(process.ProcessName))
                     {
-                        if (process.ProcessName.Equals(processName, StringComparison.OrdinalIgnoreCase))
+                        int length = NativeMethods.GetWindowTextLength(window.hwnd);
+                        if (length > 0)
                         {
-                            browserWindows.Add((hwnd, (int)pid));
-                            break;
+                            lock (browserWindows)
+                            {
+                                browserWindows.Add((window.hwnd, (int)window.pid));
+                            }
                         }
                     }
                 }
-                catch { }
-
-                return true;
-            }, IntPtr.Zero);
+                catch (ArgumentException)
+                {
+                    // Process might have exited, ignore
+                }
+            });
 
             return browserWindows;
         }

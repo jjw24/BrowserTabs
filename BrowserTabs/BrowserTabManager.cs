@@ -4,6 +4,7 @@ using System.Diagnostics;
 using System.Text;
 using System.Windows.Automation;
 using System.Linq;
+using System.Threading.Tasks;
 
 namespace BrowserTabs
 {
@@ -71,34 +72,37 @@ namespace BrowserTabs
         private static List<BrowserTab> GetTabsFromWindow(AutomationElement mainWindow, Process process)
         {
             var tabs = new List<BrowserTab>();
-
             try
             {
+                // Use HashSet for O(1) class name checks
+                var classNames = new HashSet<string>(ChromiumTabClassNames, StringComparer.Ordinal);
+
+                // Combine conditions: TabItem + known class names
                 var tabCondition = new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.TabItem);
                 var tabElements = mainWindow.FindAll(TreeScope.Descendants, tabCondition);
 
                 if (tabElements.Count > 0)
                 {
-                    for (int i = 0; i < tabElements.Count; i++)
+                    // Use parallel processing for tab creation
+                    var tabList = new BrowserTab?[tabElements.Count];
+                    Parallel.For(0, tabElements.Count, i =>
                     {
-                        try
-                        {
-                            var tabElement = tabElements[i];
+                        var tabElement = tabElements[i];
+                        if (!classNames.Contains(tabElement.Current.ClassName))
+                            return;
 
-                            // Only include tabs with known Chromium tab class names
-                            if (!ChromiumTabClassNames.Contains(tabElement.Current.ClassName, StringComparer.Ordinal))
-                                continue;
-
-                            var tab = CreateTabFromElement(tabElement, process, i);
-                            if (tab != null)
-                            {
-                                tabs.Add(tab);
-                            }
-                        }
-                        catch (Exception ex)
+                        var tab = CreateTabFromElement(tabElement, process, i);
+                        if (tab != null)
                         {
-                            Console.Error.WriteLine($"Error processing tab element: {ex}");
+                            tabList[i] = tab;
                         }
+                    });
+
+                    // Add non-null tabs to result
+                    foreach (var tab in tabList)
+                    {
+                        if (tab != null)
+                            tabs.Add(tab);
                     }
                 }
             }
@@ -106,7 +110,6 @@ namespace BrowserTabs
             {
                 Console.Error.WriteLine($"Error getting tabs from window: {ex}");
             }
-
             return tabs;
         }
 

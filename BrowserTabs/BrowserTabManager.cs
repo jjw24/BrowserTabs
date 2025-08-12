@@ -32,34 +32,36 @@ namespace BrowserTabs
         public static List<BrowserTab> GetChromiumTabs()
         {
             var tabs = new List<BrowserTab>();
-
             try
             {
                 var browserWindows = GetAllChromiumWindows();
+                var tabBag = new System.Collections.Concurrent.ConcurrentBag<BrowserTab>();
 
-                foreach (var (hwnd, processId) in browserWindows)
+                Parallel.ForEach(browserWindows, window =>
                 {
                     try
                     {
-                        var process = Process.GetProcessById(processId);
-                        var mainWindow = AutomationElement.FromHandle(hwnd);
+                        var process = Process.GetProcessById(window.processId);
+                        var mainWindow = AutomationElement.FromHandle(window.hwnd);
                         if (mainWindow != null)
                         {
                             var windowTabs = GetTabsFromWindow(mainWindow, process);
-                            tabs.AddRange(windowTabs);
+                            foreach (var tab in windowTabs)
+                                tabBag.Add(tab);
                         }
                     }
-                    catch (Exception ex)
+                    catch (ArgumentException)
                     {
-                        Console.Error.WriteLine($"Error processing Chromium window: {ex}");
+                        // Process might have exited, ignore
                     }
-                }
+                });
+
+                tabs.AddRange(tabBag);
             }
             catch (Exception ex)
             {
                 Console.Error.WriteLine($"Error getting Chromium tabs: {ex}");
             }
-
             return tabs;
         }
 

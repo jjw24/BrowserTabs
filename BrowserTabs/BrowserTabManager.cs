@@ -1,10 +1,9 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Diagnostics;
-using System.Text;
 using System.Windows.Automation;
-using System.Linq;
 using System.Threading.Tasks;
+using System.Collections.Concurrent;
 
 namespace BrowserTabs
 {
@@ -13,17 +12,9 @@ namespace BrowserTabs
     /// </summary>
     public class BrowserTabManager
     {
-        private static readonly string[] ChromiumProcessNames = new[]
-        {
-            "msedge", "chrome", "brave", "vivaldi", "opera", "chromium"
-        };
-
-        // List of known tab class names for Chromium browsers
-        private static readonly string[] ChromiumTabClassNames = new[]
-        {
-            "EdgeTab", // Microsoft Edge
-            "Tab"      // Chrome, Brave, Vivaldi, Opera, Chromium
-        };
+        private static readonly HashSet<string> ChromiumProcessNames = new(
+            new[] { "msedge", "chrome", "brave", "vivaldi", "opera", "chromium" },
+            StringComparer.OrdinalIgnoreCase);
 
         /// <summary>
         /// Retrieves all open tabs from all Chromium-based browser windows.
@@ -31,13 +22,15 @@ namespace BrowserTabs
         /// <returns>List of BrowserTab objects representing each open tab.</returns>
         public static List<BrowserTab> GetChromiumTabs()
         {
-            var tabs = new List<BrowserTab>();
+            var tabBag = new ConcurrentBag<BrowserTab>();
             try
             {
                 var browserWindows = GetAllChromiumWindows();
-                var tabBag = new System.Collections.Concurrent.ConcurrentBag<BrowserTab>();
 
-                Parallel.ForEach(browserWindows, window =>
+                Parallel.ForEach(
+                    browserWindows,
+                    new ParallelOptions { MaxDegreeOfParallelism = Environment.ProcessorCount },
+                    window =>
                 {
                     try
                     {
@@ -45,8 +38,7 @@ namespace BrowserTabs
                         var mainWindow = AutomationElement.FromHandle(window.hwnd);
                         if (mainWindow != null)
                         {
-                            var windowTabs = GetTabsFromWindow(mainWindow, process);
-                            foreach (var tab in windowTabs)
+                            foreach (var tab in GetTabsFromWindow(mainWindow, process))
                                 tabBag.Add(tab);
                         }
                     }
@@ -55,14 +47,12 @@ namespace BrowserTabs
                         // Process might have exited, ignore
                     }
                 });
-
-                tabs.AddRange(tabBag);
             }
             catch (Exception ex)
             {
                 Console.Error.WriteLine($"Error getting Chromium tabs: {ex}");
             }
-            return tabs;
+            return new List<BrowserTab>(tabBag);
         }
 
         /// <summary>
@@ -76,37 +66,47 @@ namespace BrowserTabs
             var tabs = new List<BrowserTab>();
             try
             {
-                // Use HashSet for O(1) class name checks
-                var classNames = new HashSet<string>(ChromiumTabClassNames, StringComparer.Ordinal);
+                // Use AndCondition to filter by both ControlType and ClassName
+                var tabCondition = new AndCondition(
+                    new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.TabItem),
+                    new OrCondition(
+                        new PropertyCondition(AutomationElement.ClassNameProperty, "EdgeTab"), // Microsoft Edge
+                        new PropertyCondition(AutomationElement.ClassNameProperty, "Tab") // Chrome, Brave, Vivaldi, Opera, Chromium
+                    )
+                );
 
-                // Combine conditions: TabItem + known class names
-                var tabCondition = new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.TabItem);
-                var tabElements = mainWindow.FindAll(TreeScope.Descendants, tabCondition);
+                // Restrict to TreeScope.Children if possible for speed
+                AutomationElementCollection tabElements = mainWindow.FindAll(TreeScope.Descendants, tabCondition);
 
-                if (tabElements.Count > 0)
+                int count = tabElements.Count;
+                if (count > 0)
                 {
-                    // Use parallel processing for tab creation
-                    var tabList = new BrowserTab?[tabElements.Count];
-                    Parallel.For(0, tabElements.Count, i =>
-                    {
-                        var tabElement = tabElements[i];
-                        if (!classNames.Contains(tabElement.Current.ClassName))
-                            return;
+                    // Use partitioner for better parallelism
+                    var rangePartitioner = Partitioner.Create(0, count);
+                    var tabList = new BrowserTab[count];
 
-                        var tab = CreateTabFromElement(tabElement, process, i);
-                        if (tab != null)
+                    Parallel.ForEach(rangePartitioner, range =>
+                    {
+                        for (int i = range.Item1; i < range.Item2; i++)
                         {
-                            tabList[i] = tab;
+                            var tabElement = tabElements[i];
+                            var tab = CreateTabFromElement(tabElement, process, i);
+                            if (tab != null)
+                                tabList[i] = tab;
                         }
                     });
 
                     // Add non-null tabs to result
-                    foreach (var tab in tabList)
+                    for (int i = 0; i < count; i++)
                     {
-                        if (tab != null)
-                            tabs.Add(tab);
+                        if (tabList[i] != null)
+                            tabs.Add(tabList[i]);
                     }
                 }
+            }
+            catch (ElementNotAvailableException ex)
+            {
+                Console.Error.WriteLine($"Element not available: {ex}");
             }
             catch (Exception ex)
             {
@@ -126,7 +126,7 @@ namespace BrowserTabs
         {
             try
             {
-                var name = tabElement.Current.Name;
+                var name = tabElement.GetCurrentPropertyValue(AutomationElement.NameProperty) as string;
                 if (string.IsNullOrEmpty(name) || name == "New Tab" || name.Contains("about:blank"))
                     return null;
 
@@ -136,8 +136,9 @@ namespace BrowserTabs
                     var selectionPattern = tabElement.GetCurrentPattern(SelectionItemPattern.Pattern) as SelectionItemPattern;
                     isSelected = selectionPattern?.Current.IsSelected ?? false;
                 }
-                catch
+                catch (InvalidOperationException)
                 {
+                    // Pattern not available
                 }
 
                 return new BrowserTab
@@ -150,6 +151,11 @@ namespace BrowserTabs
                     AutomationElement = tabElement,
                     BrowserName = process.ProcessName
                 };
+            }
+            catch (ElementNotAvailableException ex)
+            {
+                Console.Error.WriteLine($"Element not available: {ex}");
+                return null;
             }
             catch (Exception ex)
             {
@@ -180,6 +186,10 @@ namespace BrowserTabs
                     return true;
                 }
             }
+            catch (ElementNotAvailableException ex)
+            {
+                Console.Error.WriteLine($"Element not available: {ex}");
+            }
             catch (Exception ex)
             {
                 Console.Error.WriteLine($"Error activating tab: {ex}");
@@ -199,8 +209,6 @@ namespace BrowserTabs
             {
                 if (tab.AutomationElement != null)
                 {
-                    ActivateTab(tab);
-
                     // Search for the close button as a child of the tab element
                     var closeButtonCondition = new OrCondition(
                         new AndCondition(
@@ -213,7 +221,6 @@ namespace BrowserTabs
                         )
                     );
 
-                    // Use TreeScope.Children to only look at direct children
                     var closeButtons = tab.AutomationElement.FindAll(TreeScope.Children, closeButtonCondition);
                     if (closeButtons.Count > 0)
                     {
@@ -226,6 +233,10 @@ namespace BrowserTabs
                         }
                     }
                 }
+            }
+            catch (ElementNotAvailableException ex)
+            {
+                Console.Error.WriteLine($"Element not available: {ex}");
             }
             catch (Exception ex)
             {
@@ -256,8 +267,9 @@ namespace BrowserTabs
 
                 foreach (var suffix in suffixes)
                 {
-                    if (title.Contains(suffix))
-                        return title.Replace(suffix, "");
+                    int idx = title.IndexOf(suffix, StringComparison.Ordinal);
+                    if (idx >= 0)
+                        return title.Substring(0, idx);
                 }
 
                 return title;
@@ -274,34 +286,35 @@ namespace BrowserTabs
         /// <returns>List of tuples containing window handle and process ID.</returns>
         private static List<(IntPtr hwnd, int processId)> GetAllChromiumWindows()
         {
-            var browserWindows = new List<(IntPtr, int)>();
-            var chromiumNames = new HashSet<string>(ChromiumProcessNames, StringComparer.OrdinalIgnoreCase);
+            var browserWindows = new ConcurrentBag<(IntPtr, int)>();
             var windowHandles = new List<(IntPtr hwnd, uint pid)>();
 
-            // First, collect all window handles and process IDs
-            NativeMethods.EnumWindows((hwnd, lParam) =>
+            // Collect all window handles and process IDs in a background thread
+            Task.Run(() =>
             {
-                uint pid;
-                NativeMethods.GetWindowThreadProcessId(hwnd, out pid);
-                windowHandles.Add((hwnd, pid));
-                return true;
-            }, IntPtr.Zero);
+                NativeMethods.EnumWindows((hwnd, lParam) =>
+                {
+                    uint pid;
+                    NativeMethods.GetWindowThreadProcessId(hwnd, out pid);
+                    windowHandles.Add((hwnd, pid));
+                    return true;
+                }, IntPtr.Zero);
+            }).Wait();
 
-            // Now process in parallel
-            Parallel.ForEach(windowHandles, window =>
+            Parallel.ForEach(
+                windowHandles,
+                new ParallelOptions { MaxDegreeOfParallelism = Environment.ProcessorCount },
+                window =>
             {
                 try
                 {
                     var process = Process.GetProcessById((int)window.pid);
-                    if (chromiumNames.Contains(process.ProcessName))
+                    if (ChromiumProcessNames.Contains(process.ProcessName))
                     {
                         int length = NativeMethods.GetWindowTextLength(window.hwnd);
                         if (length > 0)
                         {
-                            lock (browserWindows)
-                            {
-                                browserWindows.Add((window.hwnd, (int)window.pid));
-                            }
+                            browserWindows.Add((window.hwnd, (int)window.pid));
                         }
                     }
                 }
@@ -311,7 +324,7 @@ namespace BrowserTabs
                 }
             });
 
-            return browserWindows;
+            return new List<(IntPtr, int)>(browserWindows);
         }
     }
 }

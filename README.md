@@ -33,4 +33,3 @@ dotnet add package BrowserTabs
 # TODO:
 1. Handle grouped tabs
 2. Fix tab URL extraction logic
-3. Optimize tab retrieval logic for better performance

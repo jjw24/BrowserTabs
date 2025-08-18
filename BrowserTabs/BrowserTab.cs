@@ -24,19 +24,19 @@ namespace BrowserTabs
         public string Url { get; set; } = string.Empty;
 
         /// <summary>
-        /// Indicates whether the tab is currently active.
-        /// </summary>
-        public bool IsActive { get; set; }
-
-        /// <summary>
-        /// The index of the tab within its window.
-        /// </summary>
-        public int TabIndex { get; set; }
-
-        /// <summary>
         /// The UI Automation element representing the tab.
         /// </summary>
         public AutomationElement? AutomationElement { get; set; }
+
+        /// <summary>
+        /// The window handle for restoring the window before activating the tab.
+        /// </summary>
+        public IntPtr Hwnd { get; set; }
+
+        /// <summary>
+        /// Is the tab part of a minimized window.
+        /// </summary>
+        public bool IsMinimized { get; set; }
 
         /// <summary>
         /// The name of the browser process that owns this tab.

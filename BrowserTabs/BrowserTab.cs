@@ -19,11 +19,6 @@ namespace BrowserTabs
         public string Title { get; set; } = string.Empty;
 
         /// <summary>
-        /// The URL or page title of the tab.
-        /// </summary>
-        public string Url { get; set; } = string.Empty;
-
-        /// <summary>
         /// The UI Automation element representing the tab.
         /// </summary>
         public AutomationElement? AutomationElement { get; set; }

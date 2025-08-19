@@ -203,7 +203,6 @@ namespace BrowserTabs
                 {
                     Id = $"{process.Id}_{index}",
                     Title = name,
-                    Url = ExtractUrlFromTitle(name),
                     IsMinimized = isTabMinimized,
                     AutomationElement = tabElement,
                     Hwnd = hwnd,
@@ -312,40 +311,6 @@ namespace BrowserTabs
             }
 
             return false;
-        }
-
-        /// <summary>
-        /// Extracts the URL or page title from a browser tab's title string.
-        /// </summary>
-        /// <param name="title">Tab title string.</param>
-        /// <returns>Extracted URL or page title.</returns>
-        private static string ExtractUrlFromTitle(string title)
-        {
-            try
-            {
-                string[] suffixes = new[]
-                {
-                    " - Microsoft Edge",
-                    " - Google Chrome",
-                    " - Brave",
-                    " - Vivaldi",
-                    " - Opera",
-                    " - Chromium"
-                };
-
-                foreach (var suffix in suffixes)
-                {
-                    int idx = title.IndexOf(suffix, StringComparison.Ordinal);
-                    if (idx >= 0)
-                        return title.Substring(0, idx);
-                }
-
-                return title;
-            }
-            catch
-            {
-                return title;
-            }
         }
 
         /// <summary>

@@ -1,8 +1,9 @@
-﻿using System;
+using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Automation;
 using System.Runtime.InteropServices;
@@ -22,20 +23,29 @@ namespace BrowserTabs
         /// Retrieves all open tabs from all Chromium-based browser windows,
         /// using a unified logic to avoid duplicate or separate calls.
         /// </summary>
+        /// <param name="cancellationToken">Token to cancel the operation.</param>
         /// <returns>List of BrowserTab objects representing each open tab.</returns>
-        public static List<BrowserTab> GetAllChromiumTabs()
+        public static List<BrowserTab> GetAllChromiumTabs(CancellationToken cancellationToken = default)
         {
             var tabBag = new ConcurrentBag<BrowserTab>();
 
             try
             {
-                var browserWindows = GetAllChromiumWindows();
+                if (cancellationToken.IsCancellationRequested)
+                    return new List<BrowserTab>();
+
+                var browserWindows = GetAllChromiumWindows(cancellationToken);
+
+                if (cancellationToken.IsCancellationRequested)
+                    return new List<BrowserTab>();
 
                 Parallel.ForEach(
                     browserWindows,
-                    new ParallelOptions { MaxDegreeOfParallelism = Environment.ProcessorCount },
+                    new ParallelOptions { MaxDegreeOfParallelism = Environment.ProcessorCount, CancellationToken = cancellationToken },
                     window =>
                     {
+                        cancellationToken.ThrowIfCancellationRequested();
+
                         try
                         {
                             var process = Process.GetProcessById(window.processId);
@@ -44,17 +54,25 @@ namespace BrowserTabs
                                 return;
 
                             var tabs = !IsWindowMinimized(window.hwnd)
-                                ? GetTabsFromWindow(mainWindow, process)
-                                : GetTabsFromWindowMinimized(mainWindow, process, window.hwnd);
+                                ? GetTabsFromWindow(mainWindow, process, cancellationToken)
+                                : GetTabsFromWindowMinimized(mainWindow, process, window.hwnd, cancellationToken);
 
                             for (int i = 0; i < tabs.Count; i++)
+                            {
+                                cancellationToken.ThrowIfCancellationRequested();
+
                                 tabBag.Add(tabs[i]);
+                            }
                         }
                         catch (ArgumentException)
                         {
                             // Process might have exited, ignore
                         }
                     });
+            }
+            catch (OperationCanceledException)
+            {
+                return new List<BrowserTab>();
             }
             catch (Exception ex)
             {
@@ -69,12 +87,16 @@ namespace BrowserTabs
         /// </summary>
         /// <param name="mainWindow">AutomationElement representing the browser window.</param>
         /// <param name="process">Process object for the browser.</param>
+        /// <param name="cancellationToken">Token to cancel the operation.</param>
         /// <returns>List of BrowserTab objects found in the window.</returns>
-        private static List<BrowserTab> GetTabsFromWindow(AutomationElement mainWindow, Process process)
+        private static List<BrowserTab> GetTabsFromWindow(AutomationElement mainWindow, Process process, CancellationToken cancellationToken)
         {
             var tabs = new List<BrowserTab>();
             try
             {
+                if (cancellationToken.IsCancellationRequested)
+                    return new List<BrowserTab>();
+
                 var tabCondition =
                     new OrCondition(
                         new PropertyCondition(AutomationElement.ClassNameProperty, "EdgeTab"), // Microsoft Edge
@@ -86,14 +108,21 @@ namespace BrowserTabs
                 int count = tabElements.Count;
                 if (count > 0)
                 {
+                    if (cancellationToken.IsCancellationRequested)
+                        return new List<BrowserTab>();
+
                     // Use partitioner for better parallelism
                     var rangePartitioner = Partitioner.Create(0, count);
                     var tabList = new BrowserTab[count];
 
-                    Parallel.ForEach(rangePartitioner, range =>
+                    Parallel.ForEach(rangePartitioner, new ParallelOptions { CancellationToken = cancellationToken }, range =>
                     {
+                        cancellationToken.ThrowIfCancellationRequested();
+
                         for (int i = range.Item1; i < range.Item2; i++)
                         {
+                            cancellationToken.ThrowIfCancellationRequested();
+
                             var tabElement = tabElements[i];
                             var tab = CreateTabFromElement(tabElement, process, i);
                             if (tab != null)
@@ -104,6 +133,8 @@ namespace BrowserTabs
                     // Add non-null tabs to result
                     for (int i = 0; i < count; i++)
                     {
+                        cancellationToken.ThrowIfCancellationRequested();
+
                         if (tabList[i] != null)
                             tabs.Add(tabList[i]);
                     }
@@ -128,34 +159,47 @@ namespace BrowserTabs
         /// <param name="mainWindow">AutomationElement representing the browser window.</param>
         /// <param name="process">Process object for the browser.</param>
         /// <param name="hwnd">The window handle for restoring the window before activating the tab.</param>
+        /// <param name="cancellationToken">Token to cancel the operation.</param>
         /// <returns>List of BrowserTab objects found in the minimized window.</returns>
-        private static List<BrowserTab> GetTabsFromWindowMinimized(AutomationElement mainWindow, Process process, IntPtr hwnd)
+        private static List<BrowserTab> GetTabsFromWindowMinimized(AutomationElement mainWindow, Process process, IntPtr hwnd, CancellationToken cancellationToken)
         {
             var tabBag = new ConcurrentBag<BrowserTab>();
             try
             {
+                if (cancellationToken.IsCancellationRequested)
+                    return new List<BrowserTab>();
+
                 var elementConditions = new OrCondition(
                     new PropertyCondition(AutomationElement.ClassNameProperty, "EdgeVerticalTabContainerView"),
                     new PropertyCondition(AutomationElement.ClassNameProperty, "EdgeTabStripRegionView")
                 );
 
                 var matchedElements = mainWindow.FindAll(TreeScope.Descendants, elementConditions);
-                
+
                 if (matchedElements.Count == 0)
                     return new List<BrowserTab>();
 
-                Parallel.ForEach(matchedElements.Cast<AutomationElement>(), element =>
+                if (cancellationToken.IsCancellationRequested)
+                    return new List<BrowserTab>();
+
+                Parallel.ForEach(matchedElements.Cast<AutomationElement>(), new ParallelOptions { CancellationToken = cancellationToken }, element =>
                 {
+                    cancellationToken.ThrowIfCancellationRequested();
+
                     var stack = new Stack<AutomationElement>();
                     stack.Push(element);
 
                     while (stack.Count > 0)
                     {
+                        cancellationToken.ThrowIfCancellationRequested();
+
                         var current = stack.Pop();
                         // Only check children, not all descendants, for performance
                         var child = TreeWalker.RawViewWalker.GetFirstChild(current);
                         while (child != null)
                         {
+                            cancellationToken.ThrowIfCancellationRequested();
+
                             // Check if an Edge tab item
                             if (child.Current.ClassName == "EdgeTab" &&
                                 child.Current.ControlType == ControlType.TabItem)
@@ -316,28 +360,41 @@ namespace BrowserTabs
         /// <summary>
         /// Finds all top-level Chromium browser windows on the system.
         /// </summary>
+        /// <param name="cancellationToken">Token to cancel the operation.</param>
         /// <returns>List of tuples containing window handle and process ID.</returns>
-        private static List<(IntPtr hwnd, int processId)> GetAllChromiumWindows()
+        private static List<(IntPtr hwnd, int processId)> GetAllChromiumWindows(CancellationToken cancellationToken)
         {
             var browserWindows = new ConcurrentBag<(IntPtr, int)>();
             var windowHandles = new List<(IntPtr hwnd, uint pid)>();
+
+            if (cancellationToken.IsCancellationRequested)
+                return new List<(IntPtr, int)>();
 
             Task.Run(() =>
             {
                 NativeMethods.EnumWindows((hwnd, lParam) =>
                 {
+                    cancellationToken.ThrowIfCancellationRequested();
+
                     uint pid;
                     NativeMethods.GetWindowThreadProcessId(hwnd, out pid);
                     windowHandles.Add((hwnd, pid));
+
                     return true;
+
                 }, IntPtr.Zero);
-            }).Wait();
+            }, cancellationToken).Wait(cancellationToken);
+
+            if (cancellationToken.IsCancellationRequested)
+                return new List<(IntPtr, int)>();
 
             Parallel.ForEach(
                 windowHandles,
-                new ParallelOptions { MaxDegreeOfParallelism = Environment.ProcessorCount },
+                new ParallelOptions { MaxDegreeOfParallelism = Environment.ProcessorCount, CancellationToken = cancellationToken },
                 window =>
                 {
+                    cancellationToken.ThrowIfCancellationRequested();
+
                     try
                     {
                         var process = Process.GetProcessById((int)window.pid);

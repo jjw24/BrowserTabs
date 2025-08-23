@@ -37,5 +37,93 @@ namespace BrowserTabs
         /// The name of the browser process that owns this tab.
         /// </summary>
         public string BrowserName { get; set; } = string.Empty;
+
+        /// <summary>
+        /// Activates this browser tab.
+        /// </summary>
+        /// <returns>True if successful, false otherwise.</returns>
+        public bool ActivateTab()
+        {
+            try
+            {
+                if (AutomationElement is null)
+                {
+                    Console.Error.WriteLine("Cannot activate tab because AutomationElement is null");
+                    return false;
+                }
+
+                if (IsMinimized)
+                    NativeMethods.ShowWindow(Hwnd, NativeMethods.SW_RESTORE);
+
+                var selectionPattern = AutomationElement.GetCurrentPattern(SelectionItemPattern.Pattern) as SelectionItemPattern;
+                if (selectionPattern != null)
+                {
+                    selectionPattern.Select();
+                    return true;
+                }
+            }
+            catch (ElementNotAvailableException ex)
+            {
+                Console.Error.WriteLine($"Element not available: {ex}");
+            }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine($"Error activating tab: {ex}");
+            }
+
+            return false;
+        }
+
+        /// <summary>
+        /// Closes this browser tab.
+        /// </summary>
+        /// <returns>True if successful, false otherwise.</returns>
+        public bool CloseTab()
+        {
+            if (AutomationElement is null)
+            {
+                Console.Error.WriteLine("Cannot close tab because AutomationElement is null");
+                return false;
+            }
+
+            try
+            {
+                if (IsMinimized)
+                    NativeMethods.ShowWindow(Hwnd, NativeMethods.SW_RESTORE);
+
+                var closeButtonCondition = new OrCondition(
+                    new AndCondition(
+                        new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.Button),
+                        new PropertyCondition(AutomationElement.NameProperty, "Close")
+                    ),
+                    new AndCondition(
+                        new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.Button),
+                        new PropertyCondition(AutomationElement.NameProperty, "Close tab", PropertyConditionFlags.IgnoreCase)
+                    )
+                );
+
+                var closeButtons = AutomationElement.FindAll(TreeScope.Children, closeButtonCondition);
+                if (closeButtons.Count > 0)
+                {
+                    var closeButton = closeButtons[0];
+                    var invokePattern = closeButton.GetCurrentPattern(InvokePattern.Pattern) as InvokePattern;
+                    if (invokePattern != null)
+                    {
+                        invokePattern.Invoke();
+                        return true;
+                    }
+                }
+            }
+            catch (ElementNotAvailableException ex)
+            {
+                Console.Error.WriteLine($"Element not available: {ex}");
+            }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine($"Error closing tab: {ex}");
+            }
+
+            return false;
+        }
     }
 }

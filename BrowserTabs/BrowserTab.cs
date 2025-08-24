@@ -88,9 +88,6 @@ namespace BrowserTabs
 
             try
             {
-                if (IsMinimized)
-                    NativeMethods.ShowWindow(Hwnd, NativeMethods.SW_RESTORE);
-
                 // Special handling for closing Microsoft Edge tab- needs to be activated first
                 if (BrowserName.Equals("msedge", StringComparison.OrdinalIgnoreCase))
                     ActivateTab();

@@ -55,10 +55,17 @@ namespace BrowserTabs
                 if (IsMinimized)
                     NativeMethods.ShowWindow(Hwnd, NativeMethods.SW_RESTORE);
 
-                var selectionPattern = AutomationElement.GetCurrentPattern(SelectionItemPattern.Pattern) as SelectionItemPattern;
-                if (selectionPattern != null)
+                // Chromium
+                if (AutomationElement.TryGetCurrentPattern(SelectionItemPattern.Pattern, out var pattern) && pattern is SelectionItemPattern selectionPattern)
                 {
                     selectionPattern.Select();
+                    return true;
+                }
+                
+                // Firefox
+                if (AutomationElement.TryGetCurrentPattern(InvokePattern.Pattern, out var invokePattern) && invokePattern is InvokePattern invoke)
+                {
+                    invoke.Invoke();
                     return true;
                 }
             }

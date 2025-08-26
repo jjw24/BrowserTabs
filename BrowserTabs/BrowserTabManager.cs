@@ -28,6 +28,7 @@ namespace BrowserTabs
         public static List<BrowserTab> GetAllChromiumTabs(CancellationToken cancellationToken = default)
         {
             var tabBag = new ConcurrentBag<BrowserTab>();
+            var tabBag2 = new ConcurrentBag<BrowserTab>();
 
             try
             {
@@ -53,16 +54,58 @@ namespace BrowserTabs
                             if (mainWindow is null)
                                 return;
 
-                            var tabs = !IsWindowMinimized(window.hwnd)
-                                ? GetTabsFromWindow(mainWindow, process, cancellationToken)
-                                : GetTabsFromWindowMinimized(mainWindow, process, window.hwnd, cancellationToken);
-
-                            for (int i = 0; i < tabs.Count; i++)
+                            if (process.ProcessName.Equals("msedge", StringComparison.OrdinalIgnoreCase))
                             {
                                 cancellationToken.ThrowIfCancellationRequested();
 
-                                tabBag.Add(tabs[i]);
+                                var edgeTabs = GetTabsFromWindowMinimized(mainWindow, process, window.hwnd, cancellationToken);
+                                for (int i = 0; i < edgeTabs.Count; i++)
+                                {
+                                    cancellationToken.ThrowIfCancellationRequested();
+                                    tabBag.Add(edgeTabs[i]);
+                                }
                             }
+                            else
+                            {
+                                cancellationToken.ThrowIfCancellationRequested();
+
+                                var chromiumTabs = GetTabsFromWindow(mainWindow, process, cancellationToken);
+                                for (int i = 0; i < chromiumTabs.Count; i++)
+                                {
+                                    cancellationToken.ThrowIfCancellationRequested();
+                                    tabBag.Add(chromiumTabs[i]);
+                                }
+                            }
+
+
+                            //var sw1 = Stopwatch.StartNew();
+                            //var result1 = GetTabsFromWindowMinimized(mainWindow, process, window.hwnd, cancellationToken);
+                            //sw1.Stop();
+                            //Console.WriteLine($"GetTabsFromWindow took {sw1.ElapsedMilliseconds} ms");
+
+                            //var sw2 = Stopwatch.StartNew();
+                            //var result2 = GetTabsFromWindowMinimizedSolution2(mainWindow, process, window.hwnd, cancellationToken);
+                            //sw2.Stop();
+                            //Console.WriteLine($"GetTabsFromWindowMinimized took {sw2.ElapsedMilliseconds} ms");
+
+                            //for (int i = 0; i < result1.Count; i++)
+                            //{
+                            //    cancellationToken.ThrowIfCancellationRequested();
+
+                            //    tabBag.Add(result1[i]);
+                            //}
+
+                            //for (int i = 0; i < result2.Count; i++)
+                            //{
+                            //    cancellationToken.ThrowIfCancellationRequested();
+
+                            //    tabBag2.Add(result2[i]);
+                            //}
+
+                            //if (result1.Count > 3 && result2.Count > 3)
+                            //{
+
+                            //}
                         }
                         catch (ArgumentException)
                         {
@@ -209,6 +252,124 @@ namespace BrowserTabs
                                     tabBag.Add(tab);
                             }
                             stack.Push(child);
+                            child = TreeWalker.RawViewWalker.GetNextSibling(child);
+                        }
+                    }
+                });
+            }
+            catch (ElementNotAvailableException ex)
+            {
+                Console.Error.WriteLine($"Element not available: {ex}");
+            }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine($"Error getting tabs from minimized window: {ex}");
+            }
+
+            return new List<BrowserTab>(tabBag);
+        }
+
+        private static List<BrowserTab> GetTabsFromWindowMinimizedSolution2(AutomationElement mainWindow, Process process, IntPtr hwnd, CancellationToken cancellationToken)
+        {
+            var tabBag = new ConcurrentBag<BrowserTab>();
+            var seenRuntimeIds = new ConcurrentDictionary<string, byte>(StringComparer.Ordinal);
+            static string GetRuntimeIdKey(AutomationElement el)
+            {
+                try
+                {
+                    var ids = el.GetRuntimeId();
+                    if (ids != null && ids.Length > 0)
+                        return string.Join("-", ids);
+                }
+                catch { }
+                return string.Empty;
+            }
+            try
+            {
+                if (cancellationToken.IsCancellationRequested)
+                    return new List<BrowserTab>();
+
+                // Use per-container query first; fallback to raw only when needed
+                var strictTabCondition = new AndCondition(
+                    new PropertyCondition(AutomationElement.ClassNameProperty, "EdgeTab"),
+                    new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.TabItem)
+                );
+
+                // Fallback: find candidate containers then query tabs within each
+                var containerConditions = new OrCondition(
+                    new PropertyCondition(AutomationElement.ClassNameProperty, "EdgeVerticalTabContainerView"),
+                    new PropertyCondition(AutomationElement.ClassNameProperty, "EdgeTabStripRegionView")
+                );
+                var matchedElements = mainWindow.FindAll(TreeScope.Descendants, containerConditions);
+                if (matchedElements.Count == 0)
+                    return new List<BrowserTab>();
+
+                if (cancellationToken.IsCancellationRequested)
+                    return new List<BrowserTab>();
+
+                Parallel.ForEach(matchedElements.Cast<AutomationElement>(), new ParallelOptions { CancellationToken = cancellationToken }, element =>
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+
+                    var cache = new CacheRequest();
+                    cache.Add(AutomationElement.NameProperty);
+                    cache.Add(AutomationElement.ClassNameProperty);
+                    cache.Add(AutomationElement.ControlTypeProperty);
+                    cache.TreeScope = TreeScope.Element | TreeScope.Children;
+                    using (cache.Activate())
+                    {
+                        var tabElements = element.FindAll(TreeScope.Descendants, strictTabCondition);
+                        if (tabElements.Count > 0)
+                        {
+                            int count = tabElements.Count;
+                            for (int i = 0; i < count; i++)
+                            {
+                                cancellationToken.ThrowIfCancellationRequested();
+                                var tabElement = tabElements[i];
+                                var key = GetRuntimeIdKey(tabElement);
+                                if (!string.IsNullOrEmpty(key))
+                                {
+                                    if (!seenRuntimeIds.TryAdd(key, 1))
+                                        continue;
+                                }
+                                var tab = CreateTabFromElement(tabElement, process, i, hwnd, isTabMinimized: true);
+                                if (tab != null)
+                                {
+                                    tabBag.Add(tab);
+                                }
+                            }
+                        }
+                    }
+
+                    // Shallow raw traversal (limited depth) to catch missed tabs without full deep walk
+                    const int maxDepth = 3;
+                    var nodeStack = new Stack<(AutomationElement node, int depth)>();
+                    nodeStack.Push((element, 0));
+                    while (nodeStack.Count > 0)
+                    {
+                        cancellationToken.ThrowIfCancellationRequested();
+                        var (current, depth) = nodeStack.Pop();
+                        if (depth >= maxDepth)
+                            continue;
+                        var child = TreeWalker.RawViewWalker.GetFirstChild(current);
+                        while (child != null)
+                        {
+                            cancellationToken.ThrowIfCancellationRequested();
+                            try
+                            {
+                                if (child.Current.ClassName == "EdgeTab" && child.Current.ControlType == ControlType.TabItem)
+                                {
+                                    var key = GetRuntimeIdKey(child);
+                                    if (string.IsNullOrEmpty(key) || seenRuntimeIds.TryAdd(key, 1))
+                                    {
+                                        var tab = CreateTabFromElement(child, process, 0, hwnd, isTabMinimized: true);
+                                        if (tab != null)
+                                            tabBag.Add(tab);
+                                    }
+                                }
+                            }
+                            catch { }
+                            nodeStack.Push((child, depth + 1));
                             child = TreeWalker.RawViewWalker.GetNextSibling(child);
                         }
                     }
